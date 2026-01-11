@@ -25,6 +25,7 @@ import { log } from "../shared";
 import { migrateAgentConfig } from "../shared/permission-compat";
 import { PROMETHEUS_SYSTEM_PROMPT, PROMETHEUS_PERMISSION } from "../agents/prometheus-prompt";
 import type { ModelCacheState } from "../plugin-state";
+import { DEFAULT_CATEGORIES } from "../tools/sisyphus-task/constants";
 
 export interface ConfigHandlerDeps {
   ctx: { directory: string };
@@ -98,6 +99,10 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       pluginConfig.categories
     );
 
+    const mergedCategories = pluginConfig.categories
+      ? { ...DEFAULT_CATEGORIES, ...pluginConfig.categories }
+      : DEFAULT_CATEGORIES;
+
     // Claude Code agents: Do NOT apply permission migration
     // Claude Code uses whitelist-based tools format which is semantically different
     // from OpenCode's denylist-based permission system
@@ -144,10 +149,51 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
         Sisyphus: builtinAgents.Sisyphus,
       };
 
-      agentConfig["Sisyphus-Junior"] = createSisyphusJuniorAgent({
-        model: "anthropic/claude-sonnet-4-5",
-        temperature: 0.1,
-      });
+      const sisyphusJuniorOverride = pluginConfig.agents?.["Sisyphus-Junior"];
+      const sisyphusJuniorCategoryName = sisyphusJuniorOverride?.category;
+      const sisyphusJuniorCategoryConfig = sisyphusJuniorCategoryName
+        ? mergedCategories[sisyphusJuniorCategoryName]
+        : undefined;
+      const sisyphusJuniorModel =
+        sisyphusJuniorOverride?.model ??
+        sisyphusJuniorCategoryConfig?.model ??
+        "anthropic/claude-sonnet-4-5";
+
+      const sisyphusJuniorPromptAppend = [
+        sisyphusJuniorCategoryConfig?.prompt_append,
+        sisyphusJuniorOverride?.prompt_append,
+      ]
+        .filter(Boolean)
+        .join("\n\n") || undefined;
+
+      agentConfig["Sisyphus-Junior"] = createSisyphusJuniorAgent(
+        {
+          ...(sisyphusJuniorCategoryConfig ?? { model: sisyphusJuniorModel }),
+          model: sisyphusJuniorModel,
+          ...(sisyphusJuniorOverride?.temperature !== undefined
+            ? { temperature: sisyphusJuniorOverride.temperature }
+            : {}),
+          ...(sisyphusJuniorOverride?.top_p !== undefined
+            ? { top_p: sisyphusJuniorOverride.top_p }
+            : {}),
+          ...(sisyphusJuniorOverride?.maxTokens !== undefined
+            ? { maxTokens: sisyphusJuniorOverride.maxTokens }
+            : {}),
+          ...(sisyphusJuniorOverride?.thinking !== undefined
+            ? { thinking: sisyphusJuniorOverride.thinking }
+            : {}),
+          ...(sisyphusJuniorOverride?.reasoningEffort !== undefined
+            ? { reasoningEffort: sisyphusJuniorOverride.reasoningEffort }
+            : {}),
+          ...(sisyphusJuniorOverride?.textVerbosity !== undefined
+            ? { textVerbosity: sisyphusJuniorOverride.textVerbosity }
+            : {}),
+          ...(sisyphusJuniorOverride?.tools !== undefined
+            ? { tools: sisyphusJuniorOverride.tools }
+            : {}),
+        },
+        sisyphusJuniorPromptAppend
+      );
 
       if (builderEnabled) {
         const { name: _buildName, ...buildConfigWithoutName } =
@@ -162,9 +208,60 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
           description: `${configAgent?.build?.description ?? "Build agent"} (OpenCode default)`,
         };
 
+        const openCodeBuilderCategoryName = openCodeBuilderOverride?.category;
+        const openCodeBuilderCategoryConfig = openCodeBuilderCategoryName
+          ? mergedCategories[openCodeBuilderCategoryName]
+          : undefined;
+        const openCodeBuilderModel =
+          openCodeBuilderOverride?.model ??
+          openCodeBuilderCategoryConfig?.model ??
+          (openCodeBuilderBase as { model?: string }).model;
+
+        let openCodeBuilderConfig: Record<string, unknown> = {
+          ...openCodeBuilderBase,
+          ...(openCodeBuilderModel ? { model: openCodeBuilderModel } : {}),
+        };
+
+        if (openCodeBuilderCategoryConfig && openCodeBuilderCategoryName) {
+          // Apply category defaults first; explicit overrides applied below.
+          openCodeBuilderConfig = {
+            ...openCodeBuilderConfig,
+            ...(openCodeBuilderCategoryConfig.temperature !== undefined
+              ? { temperature: openCodeBuilderCategoryConfig.temperature }
+              : {}),
+            ...(openCodeBuilderCategoryConfig.top_p !== undefined
+              ? { top_p: openCodeBuilderCategoryConfig.top_p }
+              : {}),
+            ...(openCodeBuilderCategoryConfig.maxTokens !== undefined
+              ? { maxTokens: openCodeBuilderCategoryConfig.maxTokens }
+              : {}),
+            ...(openCodeBuilderCategoryConfig.thinking !== undefined
+              ? { thinking: openCodeBuilderCategoryConfig.thinking }
+              : {}),
+            ...(openCodeBuilderCategoryConfig.reasoningEffort !== undefined
+              ? { reasoningEffort: openCodeBuilderCategoryConfig.reasoningEffort }
+              : {}),
+            ...(openCodeBuilderCategoryConfig.textVerbosity !== undefined
+              ? { textVerbosity: openCodeBuilderCategoryConfig.textVerbosity }
+              : {}),
+            ...(openCodeBuilderCategoryConfig.tools !== undefined
+              ? { tools: openCodeBuilderCategoryConfig.tools }
+              : {}),
+          };
+
+          if (
+            openCodeBuilderCategoryConfig.prompt_append &&
+            (openCodeBuilderConfig as { prompt?: string }).prompt
+          ) {
+            openCodeBuilderConfig.prompt = `${(openCodeBuilderConfig as { prompt: string }).prompt}\n${openCodeBuilderCategoryConfig.prompt_append}`;
+          }
+        }
+
+        const { category: _cat, ...openCodeBuilderOverrideRest } =
+          openCodeBuilderOverride ?? {};
         agentConfig["OpenCode-Builder"] = openCodeBuilderOverride
-          ? { ...openCodeBuilderBase, ...openCodeBuilderOverride }
-          : openCodeBuilderBase;
+          ? { ...openCodeBuilderConfig, ...openCodeBuilderOverrideRest }
+          : openCodeBuilderConfig;
       }
 
       if (plannerEnabled) {
@@ -176,8 +273,17 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
         const prometheusOverride =
           pluginConfig.agents?.["Prometheus (Planner)"];
         const defaultModel = config.model as string | undefined;
+        const prometheusCategoryName = prometheusOverride?.category;
+        const prometheusCategoryConfig = prometheusCategoryName
+          ? mergedCategories[prometheusCategoryName]
+          : undefined;
+        const prometheusModel =
+          prometheusOverride?.model ??
+          prometheusCategoryConfig?.model ??
+          defaultModel ??
+          "anthropic/claude-opus-4-5";
         const prometheusBase = {
-          model: defaultModel ?? "anthropic/claude-opus-4-5",
+          model: prometheusModel,
           mode: "primary" as const,
           prompt: PROMETHEUS_SYSTEM_PROMPT,
           permission: PROMETHEUS_PERMISSION,
@@ -185,9 +291,45 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
           color: (configAgent?.plan?.color as string) ?? "#FF6347",
         };
 
+        let prometheusConfig: Record<string, unknown> = prometheusBase;
+
+        if (prometheusCategoryConfig && prometheusCategoryName) {
+          // Apply category defaults first; explicit overrides applied below.
+          prometheusConfig = {
+            ...prometheusConfig,
+            ...(prometheusCategoryConfig.temperature !== undefined
+              ? { temperature: prometheusCategoryConfig.temperature }
+              : {}),
+            ...(prometheusCategoryConfig.top_p !== undefined
+              ? { top_p: prometheusCategoryConfig.top_p }
+              : {}),
+            ...(prometheusCategoryConfig.maxTokens !== undefined
+              ? { maxTokens: prometheusCategoryConfig.maxTokens }
+              : {}),
+            ...(prometheusCategoryConfig.thinking !== undefined
+              ? { thinking: prometheusCategoryConfig.thinking }
+              : {}),
+            ...(prometheusCategoryConfig.reasoningEffort !== undefined
+              ? { reasoningEffort: prometheusCategoryConfig.reasoningEffort }
+              : {}),
+            ...(prometheusCategoryConfig.textVerbosity !== undefined
+              ? { textVerbosity: prometheusCategoryConfig.textVerbosity }
+              : {}),
+            ...(prometheusCategoryConfig.tools !== undefined
+              ? { tools: prometheusCategoryConfig.tools }
+              : {}),
+          };
+
+          if (prometheusCategoryConfig.prompt_append) {
+            prometheusConfig.prompt = `${prometheusBase.prompt}\n${prometheusCategoryConfig.prompt_append}`;
+          }
+        }
+
+        const { category: _cat, ...prometheusOverrideRest } =
+          prometheusOverride ?? {};
         agentConfig["Prometheus (Planner)"] = prometheusOverride
-          ? { ...prometheusBase, ...prometheusOverride }
-          : prometheusBase;
+          ? { ...prometheusConfig, ...prometheusOverrideRest }
+          : prometheusConfig;
       }
 
     const filteredConfigAgents = configAgent
@@ -235,7 +377,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       };
     }
 
-    const agentResult = config.agent as AgentConfig;
+    const agentResult = config.agent as Record<string, AgentConfig>;
 
     config.tools = {
       ...(config.tools as Record<string, unknown>),

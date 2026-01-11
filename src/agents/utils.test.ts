@@ -87,6 +87,52 @@ describe("createBuiltinAgents with model overrides", () => {
   })
 })
 
+describe("createBuiltinAgents with category overrides", () => {
+  test("agent override category sets model and variant from categories", () => {
+    // #given
+    const overrides = {
+      oracle: { category: "custom-most-capable" },
+    }
+
+    const categories = {
+      "custom-most-capable": {
+        model: "openai/gpt-5.2",
+        variant: "xhigh",
+        temperature: 0.2,
+      },
+    }
+
+    // #when
+    const agents = createBuiltinAgents([], overrides, undefined, undefined, categories)
+
+    // #then
+    expect(agents.oracle.model).toBe("openai/gpt-5.2")
+    expect(agents.oracle.variant).toBe("xhigh")
+    expect(agents.oracle.temperature).toBe(0.2)
+  })
+
+  test("orchestrator-sisyphus supports category override for model", () => {
+    // #given
+    const overrides = {
+      "orchestrator-sisyphus": { category: "custom-general" },
+    }
+
+    const categories = {
+      "custom-general": {
+        model: "google/antigravity-gemini-3-pro",
+        temperature: 0.7,
+      },
+    }
+
+    // #when
+    const agents = createBuiltinAgents([], overrides, undefined, undefined, categories)
+
+    // #then
+    expect(agents["orchestrator-sisyphus"].model).toBe("google/antigravity-gemini-3-pro")
+    expect(agents["orchestrator-sisyphus"].temperature).toBe(0.7)
+  })
+})
+
 describe("buildAgent with category and skills", () => {
   const { buildAgent } = require("./utils")
 

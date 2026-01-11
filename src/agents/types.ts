@@ -77,6 +77,8 @@ export type AgentName = BuiltinAgentName
 export type AgentOverrideConfig = Partial<AgentConfig> & {
   prompt_append?: string
   variant?: string
+  /** Category name to inherit model and other settings from CategoryConfig */
+  category?: string
 }
 
 export type AgentOverrides = Partial<Record<OverridableAgentName, AgentOverrideConfig>>

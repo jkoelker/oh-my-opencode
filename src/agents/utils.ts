@@ -51,25 +51,55 @@ function isFactory(source: AgentSource): source is AgentFactory {
 export function buildAgent(
   source: AgentSource,
   model?: string,
-  categories?: CategoriesConfig
+  categories?: CategoriesConfig,
+  categoryNameOverride?: string
 ): AgentConfig {
-  const base = isFactory(source) ? source(model) : source
+  const base = { ...(isFactory(source) ? source(model) : source) } as AgentConfig
   const categoryConfigs: Record<string, CategoryConfig> = categories
     ? { ...DEFAULT_CATEGORIES, ...categories }
     : DEFAULT_CATEGORIES
 
   const agentWithCategory = base as AgentConfig & { category?: string; skills?: string[]; variant?: string }
-  if (agentWithCategory.category) {
-    const categoryConfig = categoryConfigs[agentWithCategory.category]
+  const categoryName = categoryNameOverride ?? agentWithCategory.category
+  if (categoryName) {
+    const categoryConfig = categoryConfigs[categoryName]
     if (categoryConfig) {
-      if (!base.model) {
+      // If an explicit model was provided to the factory (from override/category),
+      // treat category settings as user-intent defaults and apply them even if the agent has built-in values.
+      const isOverrideCategory = categoryNameOverride !== undefined
+
+      if (model) {
+        base.model = model
+      } else if (!base.model) {
         base.model = categoryConfig.model
       }
-      if (base.temperature === undefined && categoryConfig.temperature !== undefined) {
+
+      if (categoryConfig.temperature !== undefined && (isOverrideCategory || base.temperature === undefined)) {
         base.temperature = categoryConfig.temperature
       }
-      if (base.variant === undefined && categoryConfig.variant !== undefined) {
-        base.variant = categoryConfig.variant
+      if (categoryConfig.top_p !== undefined && (isOverrideCategory || (base as any).top_p === undefined)) {
+        ;(base as any).top_p = categoryConfig.top_p
+      }
+      if (categoryConfig.maxTokens !== undefined && (isOverrideCategory || (base as any).maxTokens === undefined)) {
+        ;(base as any).maxTokens = categoryConfig.maxTokens
+      }
+      if (categoryConfig.variant !== undefined && (isOverrideCategory || (base as any).variant === undefined)) {
+        ;(base as any).variant = categoryConfig.variant
+      }
+      if (categoryConfig.thinking !== undefined && (isOverrideCategory || (base as any).thinking === undefined)) {
+        ;(base as any).thinking = categoryConfig.thinking as any
+      }
+      if (categoryConfig.reasoningEffort !== undefined && (isOverrideCategory || (base as any).reasoningEffort === undefined)) {
+        ;(base as any).reasoningEffort = categoryConfig.reasoningEffort
+      }
+      if (categoryConfig.textVerbosity !== undefined && (isOverrideCategory || (base as any).textVerbosity === undefined)) {
+        ;(base as any).textVerbosity = categoryConfig.textVerbosity
+      }
+      if (categoryConfig.tools !== undefined && (isOverrideCategory || (base as any).tools === undefined)) {
+        ;(base as any).tools = categoryConfig.tools as any
+      }
+      if (categoryConfig.prompt_append && (base as any).prompt) {
+        ;(base as any).prompt = `${(base as any).prompt}\n${categoryConfig.prompt_append}`
       }
     }
   }
@@ -147,9 +177,11 @@ export function createBuiltinAgents(
     if (disabledAgents.includes(agentName)) continue
 
     const override = agentOverrides[agentName]
-    const model = override?.model
+    const categoryName = override?.category
+    const categoryModel = categoryName ? mergedCategories[categoryName]?.model : undefined
+    const model = override?.model ?? categoryModel
 
-    let config = buildAgent(source, model, mergedCategories)
+    let config = buildAgent(source, model, mergedCategories, categoryName)
 
     if (agentName === "librarian" && directory && config.prompt) {
       const envContext = createEnvContext()
@@ -174,9 +206,15 @@ export function createBuiltinAgents(
 
   if (!disabledAgents.includes("Sisyphus")) {
     const sisyphusOverride = agentOverrides["Sisyphus"]
-    const sisyphusModel = sisyphusOverride?.model ?? systemDefaultModel
+    const sisyphusCategoryName = sisyphusOverride?.category
+    const sisyphusCategoryModel = sisyphusCategoryName ? mergedCategories[sisyphusCategoryName]?.model : undefined
+    const sisyphusModel = sisyphusOverride?.model ?? sisyphusCategoryModel ?? systemDefaultModel
 
     let sisyphusConfig = createSisyphusAgent(sisyphusModel, availableAgents)
+
+    if (sisyphusCategoryName) {
+      sisyphusConfig = buildAgent(sisyphusConfig, sisyphusModel, mergedCategories, sisyphusCategoryName)
+    }
 
     if (directory && sisyphusConfig.prompt) {
       const envContext = createEnvContext()
@@ -192,11 +230,17 @@ export function createBuiltinAgents(
 
   if (!disabledAgents.includes("orchestrator-sisyphus")) {
     const orchestratorOverride = agentOverrides["orchestrator-sisyphus"]
-    const orchestratorModel = orchestratorOverride?.model
+    const orchestratorCategoryName = orchestratorOverride?.category
+    const orchestratorCategoryModel = orchestratorCategoryName ? mergedCategories[orchestratorCategoryName]?.model : undefined
+    const orchestratorModel = orchestratorOverride?.model ?? orchestratorCategoryModel
     let orchestratorConfig = createOrchestratorSisyphusAgent({
       model: orchestratorModel,
       availableAgents,
     })
+
+    if (orchestratorCategoryName) {
+      orchestratorConfig = buildAgent(orchestratorConfig, orchestratorModel, mergedCategories, orchestratorCategoryName)
+    }
 
     if (orchestratorOverride) {
       orchestratorConfig = mergeAgentConfig(orchestratorConfig, orchestratorOverride)
